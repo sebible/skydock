@@ -1,11 +1,11 @@
 FROM crosbymichael/golang
 
 # go get to download all the deps
-RUN go get -u github.com/crosbymichael/skydock
 
-ADD . /go/src/github.com/crosbymichael/skydock
+ADD . /go/src/skydock
 ADD plugins/ /plugins
 
-RUN cd /go/src/github.com/crosbymichael/skydock && go install . ./...
+RUN go get -u skydock
+RUN cd /go/src/skydock && go install . ./...
 
 ENTRYPOINT ["/go/bin/skydock"]

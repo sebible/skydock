@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/crosbymichael/log"
-	"github.com/crosbymichael/skydock/utils"
+	"skydock/utils"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+        "time"
 )
 
 type (
@@ -59,6 +60,7 @@ type (
 
 	dockerClient struct {
 		path string
+                retryInterval time.Duration
 	}
 )
 
@@ -67,7 +69,7 @@ var (
 )
 
 func NewClient(path string) (Docker, error) {
-	return &dockerClient{path}, nil
+	return &dockerClient{path, 3}, nil
 }
 
 func (d *dockerClient) newConn() (*httputil.ClientConn, error) {
@@ -150,53 +152,61 @@ func (d *dockerClient) GetEvents() chan *Event {
 	eventChan := make(chan *Event, 100) // 100 event buffer
 	go func() {
 		defer close(eventChan)
+                firstTime := true
+                for {
+                    if !firstTime {
+                        log.Logf(log.FATAL, "retry in %d seconds", d.retryInterval)
+                        time.Sleep(d.retryInterval * time.Second)
+                    } else {
+                        firstTime = false
+                    }
 
-		c, err := d.newConn()
-		if err != nil {
-			log.Logf(log.FATAL, "cannot connect to docker: %s", err)
-			return
-		}
-		defer c.Close()
+                    c, err := d.newConn()
+                    if err != nil {
+                            log.Logf(log.FATAL, "cannot connect to docker: %s", err)
+                            continue
+                    }
+                    defer c.Close()
 
-		req, err := http.NewRequest("GET", "/events", nil)
-		if err != nil {
-			log.Logf(log.ERROR, "bad request for events: %s", err)
-			return
-		}
+                    req, err := http.NewRequest("GET", "/events", nil)
+                    if err != nil {
+                            log.Logf(log.ERROR, "bad request for events: %s", err)
+                            continue
+                    }
 
-		resp, err := c.Do(req)
-		if err != nil {
-			log.Logf(log.FATAL, "cannot connect to events endpoint: %s", err)
-			return
-		}
-		defer resp.Body.Close()
+                    resp, err := c.Do(req)
+                    if err != nil {
+                            log.Logf(log.FATAL, "cannot connect to events endpoint: %s", err)
+                            continue
+                    }
+                    defer resp.Body.Close()
 
-		// handle signals to stop the socket
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
-		go func() {
-			for sig := range sigChan {
-				log.Logf(log.INFO, "received signal '%v', exiting", sig)
-
-				c.Close()
-				close(eventChan)
-				os.Exit(0)
-			}
-		}()
-
-		dec := json.NewDecoder(resp.Body)
-		for {
-			var event *Event
-			if err := dec.Decode(&event); err != nil {
-				if err == io.EOF {
-					break
-				}
-				log.Logf(log.ERROR, "cannot decode json: %s", err)
-				continue
-			}
-			eventChan <- event
-		}
-		log.Logf(log.DEBUG, "closing event channel")
+                    dec := json.NewDecoder(resp.Body)
+                    for {
+                            var event *Event
+                            if err := dec.Decode(&event); err != nil {
+                                    if err == io.EOF {
+                                            break
+                                    }
+                                    log.Logf(log.ERROR, "cannot decode json: %s", err)
+                                    continue
+                            }
+                            eventChan <- event
+                    }
+                    log.Logf(log.DEBUG, "closing event channel. will reconnect")
+                }
 	}()
+        
+        // handle signals to stop the socket
+        sigChan := make(chan os.Signal, 1)
+        signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+        go func() {
+                for sig := range sigChan {
+                        log.Logf(log.INFO, "received signal '%v', exiting", sig)
+                        close(eventChan)
+                        os.Exit(0)
+                }
+        }()
+
 	return eventChan
 }
