@@ -130,8 +130,8 @@ func heartbeat(uuid string) {
 
 		if err := updateService(uuid, ttl); err != nil {
 			errorCount++
-			log.Logf(log.ERROR, "%s", err)
-			break
+                        log.Logf(log.ERROR, "updating skydns failed: %s. error count: %d", err, errorCount)
+			continue
 		}
 	}
 }
